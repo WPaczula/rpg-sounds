@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>GK150 Soundboard</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 20px;
+        font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #14161a; color: #e6e8ec;
+      }
+      h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+      .sub { color: #8b929e; margin-bottom: 16px; }
+
+      #status {
+        padding: 8px 12px; border-radius: 6px; margin-bottom: 16px;
+        background: #1d2027; border: 1px solid #2a2e37;
+      }
+      #status.bad { background: #3a1d1d; border-color: #6b2d2d; }
+      #status.good { background: #16291d; border-color: #2c5138; }
+      #status button {
+        margin-left: 10px; font-size: 12px; padding: 3px 8px;
+        background: #2a2e37; color: #e6e8ec; border: 1px solid #3a3f4a;
+        border-radius: 4px; cursor: pointer;
+      }
+
+      #grid {
+        display: grid; grid-template-columns: repeat(6, 1fr);
+        gap: 10px; max-width: 720px; margin-bottom: 20px;
+      }
+      .cell {
+        aspect-ratio: 1; border-radius: 8px; background: #1d2027;
+        border: 2px solid #2a2e37; cursor: pointer;
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; padding: 6px; text-align: center;
+        transition: background .08s, border-color .08s;
+      }
+      .cell:hover { border-color: #3f4653; }
+      .cell.selected { border-color: #5b8cff; background: #1f2634; }
+      .cell.flash { background: #5b8cff; border-color: #5b8cff; }
+      .cell.missing { border-color: #6b2d2d; }
+      .cell.track { background: #1a2230; }
+      .cell.loop { border-color: #3a5490; }
+      .cell.playing { border-color: #f2c318; background: #f2c318; }
+      .cell.playing .label { color: #000; }
+      .cell.playing .snd, .cell.playing .idx { color: #6b5a10; }
+      .cell.stopkey { background: #8c1d1d; border-color: #a33; }
+      .cell.stopkey .idx { color: #e8b4b4; }
+      .cell.off { background: #0b0d10; border-color: #1a1d23; cursor: default; }
+      .cell.off .idx { color: #333840; }
+      .cell.tab { background: #191d24; border-style: dashed; }
+      .cell.tab.active { background: #f4f5f7; border-color: #f4f5f7; border-style: solid; }
+      .cell.tab.active .label { color: #000; }
+      .cell.tab.active .idx { color: #6a6f78; }
+      .hidden { display: none; }
+      .cell .label { font-weight: 600; font-size: 13px; word-break: break-word; }
+      .cell .snd { color: #7b828e; font-size: 10px; margin-top: 4px; word-break: break-all; }
+      .cell .idx { color: #4a5059; font-size: 9px; margin-top: 4px; }
+
+      #editor {
+        max-width: 720px; padding: 14px; border-radius: 8px;
+        background: #1d2027; border: 1px solid #2a2e37;
+      }
+      #editor.hidden { display: none; }
+      #editor label { display: block; color: #8b929e; margin-bottom: 5px; }
+      #editor input[type=text] {
+        width: 100%; padding: 7px 9px; border-radius: 5px; margin-bottom: 12px;
+        background: #14161a; border: 1px solid #3a3f4a; color: #e6e8ec; font-size: 13px;
+      }
+      button.act {
+        padding: 7px 12px; border-radius: 5px; cursor: pointer; font-size: 12px;
+        background: #2a2e37; color: #e6e8ec; border: 1px solid #3a3f4a; margin-right: 8px;
+      }
+      button.act:hover { background: #333845; }
+      .sndpath { color: #7b828e; margin-top: 10px; word-break: break-all; }
+      .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; max-width: 720px; }
+      .row input[type=range] { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <h1>GK150 Soundboard</h1>
+    <div class="sub">Click a key to set its label and sound. Changes save and push to the panel immediately.</div>
+
+    <div id="status">Connecting…</div>
+    <div id="grid"></div>
+
+    <div id="editor" class="hidden">
+      <div id="editorTitle" style="font-weight:600; margin-bottom:12px"></div>
+
+      <div id="tabFields" class="hidden">
+        <label>Tab name (shown on the side key)</label>
+        <input type="text" id="tabNameInput" placeholder="e.g. Background" />
+        <button class="act" id="switchBtn">Switch to this tab</button>
+      </div>
+
+      <div id="keyFields" class="hidden">
+        <label>Label (shown on the key's screen)</label>
+        <input type="text" id="labelInput" placeholder="e.g. Airhorn" />
+        <label style="display:flex; align-items:center; gap:8px; margin-bottom:12px; color:#e6e8ec">
+          <input type="checkbox" id="loopToggle" />
+          Loop — press to start, press again to stop
+        </label>
+        <button class="act" id="pickBtn">Choose sound…</button>
+        <button class="act" id="testBtn">Test</button>
+        <button class="act" id="clearBtn">Clear key</button>
+        <div class="sndpath" id="sndPath">No sound assigned</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <span style="color:#8b929e">Brightness</span>
+      <input type="range" id="brightness" min="0" max="100" />
+      <span id="brightnessVal" style="color:#8b929e; width:32px"></span>
+      <button class="act" id="stopAllBtn">Stop all sounds</button>
+      <button class="act" id="cfgBtn">Show config file</button>
+    </div>
+
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>
