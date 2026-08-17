@@ -46,14 +46,14 @@
       .cell.playing { border-color: #f2c318; background: #f2c318; }
       .cell.playing .label { color: #000; }
       .cell.playing .snd, .cell.playing .idx { color: #6b5a10; }
-      .cell.stopkey { background: #8c1d1d; border-color: #a33; }
-      .cell.stopkey .idx { color: #e8b4b4; }
-      .cell.off { background: #0b0d10; border-color: #1a1d23; cursor: default; }
-      .cell.off .idx { color: #333840; }
-      .cell.tab { background: #191d24; border-style: dashed; }
-      .cell.tab.active { background: #f4f5f7; border-color: #f4f5f7; border-style: solid; }
-      .cell.tab.active .label { color: #000; }
-      .cell.tab.active .idx { color: #6a6f78; }
+      .cell.stopkey { background: #1d2027; border-color: #3a3f4a; }
+      .cell.stopkey .label { font-size: 22px; }
+      .cell.arrow { background: #191d24; border-style: dashed; }
+      .cell.arrow .label { font-size: 22px; }
+      .cell.lcd { background: #0b0d10; border-color: #1a1d23; cursor: default; }
+      .cell.lcd .idx { color: #333840; }
+      .cell.lcd.active { cursor: pointer; border-color: #3f4653; }
+      .cell.lcd.active .label { color: #f4f5f7; font-weight: 700; }
       .hidden { display: none; }
       .cell .label { font-weight: 600; font-size: 13px; word-break: break-word; }
       .cell .snd { color: #7b828e; font-size: 10px; margin-top: 4px; word-break: break-all; }
@@ -90,9 +90,8 @@
       <div id="editorTitle" style="font-weight:600; margin-bottom:12px"></div>
 
       <div id="tabFields" class="hidden">
-        <label>Tab name (shown on the side key)</label>
+        <label>Tab name (shown on the LCD strip)</label>
         <input type="text" id="tabNameInput" placeholder="e.g. Background" />
-        <button class="act" id="switchBtn">Switch to this tab</button>
       </div>
 
       <div id="keyFields" class="hidden">

@@ -31,19 +31,19 @@ const INDEX_BY_CODE = new Map(CODE_BY_INDEX.map((code, i) => [code, i]))
 
 // The right-hand column (device codes 0x10/0x11/0x12) has screens but reports
 // no input — verified on the hardware, pressing them emits nothing. They are
-// output-only, so we render them black and never bind anything to them.
+// output-only, so we drive them as an LCD strip: top/mid/bottom show the tab
+// above, the active tab, and the tab below.
 export const SIDE_INDEXES = [5, 11, 17]
 
-// Last key of each row in the 3x5 grid (codes 0x01/0x02/0x03) selects the tab,
-// forming a vertical tab strip beside the dead side column.
-export const TAB_INDEXES = [4, 10, 16]
-
-// Bottom row, immediately left of the tab strip: kills every sound at once.
-export const STOP_INDEX = 15
+// Last column of the 3x5 input grid (codes 0x01/0x02/0x03), beside the LCD
+// strip. Top cycles to the previous tab, bottom to the next, middle stops.
+export const TAB_UP_INDEX = 4
+export const STOP_INDEX = 10
+export const TAB_DOWN_INDEX = 16
 
 // Everything left over carries sounds.
 export const SOUND_INDEXES = CODE_BY_INDEX.map((_, i) => i).filter(
-  (i) => !SIDE_INDEXES.includes(i) && !TAB_INDEXES.includes(i) && i !== STOP_INDEX,
+  (i) => !SIDE_INDEXES.includes(i) && i !== TAB_UP_INDEX && i !== STOP_INDEX && i !== TAB_DOWN_INDEX,
 )
 
 const ascii = (s) => [...s].map((c) => c.charCodeAt(0))

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
   Panel, KEY_COUNT, COLS, ROWS, KEY_W, KEY_H,
-  TAB_INDEXES, SIDE_INDEXES, SOUND_INDEXES, STOP_INDEX,
+  TAB_UP_INDEX, TAB_DOWN_INDEX, SIDE_INDEXES, SOUND_INDEXES, STOP_INDEX,
 } from './device.js'
 import * as config from './config.js'
 
@@ -54,7 +54,8 @@ ipcMain.handle('get-state', () => ({
     rows: ROWS,
     keyW: KEY_W,
     keyH: KEY_H,
-    tabIndexes: TAB_INDEXES,
+    tabUpIndex: TAB_UP_INDEX,
+    tabDownIndex: TAB_DOWN_INDEX,
     sideIndexes: SIDE_INDEXES,
     soundIndexes: SOUND_INDEXES,
     stopIndex: STOP_INDEX,
