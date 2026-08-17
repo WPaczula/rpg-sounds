@@ -87,12 +87,26 @@ sounds/
 - Every folder-loaded sound defaults to **loop on**.
 - These tabs are regenerated from disk on every launch, so edits made to them in the app (renaming,
   clearing a key) don't persist — add, remove, or rename files/folders under `sounds/` instead.
-- Two extra tabs, **Effects** and **Fight**, start out empty and are yours to fill in and edit
-  normally — they aren't touched by the folder scan.
+- Three extra tabs, **Effects**, **Presets** and **Fight**, start out empty and are yours to fill in
+  and edit normally — they aren't touched by the folder scan.
 
 Audio files aren't committed to git (they're large and personal) — `sounds/` is gitignored apart from
 a `.gitkeep` in each category folder, so the folder layout still ships with the repo. Drop your own
 tracks into the matching folders after cloning on a new machine.
+
+## Presets
+
+The **Presets** tab (directly below **Effects**) holds scenes: one key layers several sounds borrowed
+from other tabs and starts them together — rain over a tavern over a crackling fire.
+
+- Build a preset by ticking sounds in the editor's library, or play the mix you want on its own tabs
+  and hit **Capture what's playing** to freeze it — layer volumes included.
+- Each layer has its own volume, so a preset can bury the rain under the crowd. Dragging the slider
+  is audible immediately if that layer is already sounding.
+- Pressing a preset starts its layers; pressing it again stops **only its own layers**, so two
+  scenes can be stacked and peeled off one at a time.
+- Layers are stored as sound paths, and a sound is only ever playing once: a preset and the key it
+  borrowed from share one loop, and both light up together.
 
 ## Running
 
