@@ -56,14 +56,43 @@ row 1:   snd  snd  snd  snd   TAB 2  | black
 row 2:   snd  snd  snd  STOP  TAB 3  | black
 ```
 
-- **Tabs** — rightmost grid column. Each holds its own set of 11 sound keys. Rename them in the app.
-- **STOP** — kills the running loop and every one-shot still sounding.
+- **Tabs** — rightmost grid column. Each holds its own set of 12 sound keys.
+- **STOP** — kills every running loop and every one-shot still sounding.
 - **Sound keys** — each has a label, a sound file, and a loop toggle.
   - Loop off: plays once, layering over whatever is already playing.
-  - Loop on: press starts it, press again stops it. **Only one loop runs at a time**, across all tabs.
+  - Loop on: press starts it, press again stops it. Any number of loops can run at once, across any
+    tabs — a loop keeps playing when you switch away, and its key lights up again when you come back.
 
 LCD states: normal is dark with white text; a loop-enabled key gets a blue bar; a *playing* loop is
 yellow with black text; the active tab is white with black text.
+
+## Sounds
+
+The `sounds/` folder is the source of truth for most tabs. On every launch the app scans it and
+rebuilds a tab for each subfolder:
+
+```
+sounds/
+  Ambience/
+    01 - Forest.mp3
+    02 - Village.mp3
+  Roll For Initiative/
+    01 - Ambush!.mp3
+    ...
+```
+
+- Supported formats: `wav`, `mp3`, `ogg`, `flac`, `m4a`, `aac`.
+- A folder with more than 12 tracks (the number of sound keys on one tab) is split across several
+  tabs — `Roll For Initiative 1`, `Roll For Initiative 2`, and so on.
+- Every folder-loaded sound defaults to **loop on**.
+- These tabs are regenerated from disk on every launch, so edits made to them in the app (renaming,
+  clearing a key) don't persist — add, remove, or rename files/folders under `sounds/` instead.
+- Two extra tabs, **Effects** and **Fight**, start out empty and are yours to fill in and edit
+  normally — they aren't touched by the folder scan.
+
+Audio files aren't committed to git (they're large and personal) — `sounds/` is gitignored apart from
+a `.gitkeep` in each category folder, so the folder layout still ships with the repo. Drop your own
+tracks into the matching folders after cloning on a new machine.
 
 ## Running
 
