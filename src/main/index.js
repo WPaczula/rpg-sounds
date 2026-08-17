@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
-import { readFile } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
@@ -14,6 +14,14 @@ let win = null
 let panel = null
 let state = config.load()
 
+// The panel keeps emitting key and status events on its own timers, so they
+// land whenever they land — including while the window is reloading, quitting
+// or recovering from a crash, when the render frame is already gone. Sending
+// then is not catchable: Electron logs "Render frame was disposed" from inside
+// webContents.send and swallows it, so the only way to stay quiet is to know
+// whether the renderer can receive before calling.
+let rendererReady = false
+
 function createWindow() {
   win = new BrowserWindow({
     width: 980,
@@ -26,15 +34,40 @@ function createWindow() {
       sandbox: false,
     },
   })
+
+  const wc = win.webContents
+  wc.on('did-start-loading', () => { rendererReady = false })
+  wc.on('render-process-gone', () => { rendererReady = false })
+  win.on('closed', () => {
+    win = null
+    rendererReady = false
+  })
+
   win.loadFile(join(here, '..', 'renderer', 'index.html'))
+}
+
+function send(channel, ...args) {
+  if (!rendererReady || !win || win.isDestroyed()) return
+  const wc = win.webContents
+  if (wc.isDestroyed() || wc.isCrashed()) return
+  // A renderer can die a few events before render-process-gone arrives, so the
+  // flags above still read healthy for a moment; ask the frame itself as well.
+  let frame
+  try {
+    frame = wc.mainFrame
+  } catch {
+    return
+  }
+  if (!frame || frame.isDestroyed()) return
+  frame.send(channel, ...args)
 }
 
 app.whenReady().then(() => {
   createWindow()
 
   panel = new Panel()
-  panel.on('key', (index) => win?.webContents.send('key', index))
-  panel.on('status', (s) => win?.webContents.send('status', s))
+  panel.on('key', (index) => send('key', index))
+  panel.on('status', (s) => send('status', s))
   panel.setBrightness(state.device?.brightness ?? 60)
   panel.open()
 
@@ -46,23 +79,29 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit())
 app.on('before-quit', () => panel?.close())
 
-ipcMain.handle('get-state', () => ({
-  config: state,
-  layout: {
-    keyCount: KEY_COUNT,
-    cols: COLS,
-    rows: ROWS,
-    keyW: KEY_W,
-    keyH: KEY_H,
-    tabUpIndex: TAB_UP_INDEX,
-    tabDownIndex: TAB_DOWN_INDEX,
-    sideIndexes: SIDE_INDEXES,
-    soundIndexes: SOUND_INDEXES,
-    stopIndex: STOP_INDEX,
-  },
-  connected: panel?.connected ?? false,
-  configPath: config.CONFIG_PATH,
-}))
+// The renderer subscribes to key and status events before it asks for state, so
+// this request is exactly the moment it becomes reachable — and it carries the
+// current connection state, so nothing missed while it was away needs replaying.
+ipcMain.handle('get-state', () => {
+  rendererReady = true
+  return {
+    config: state,
+    layout: {
+      keyCount: KEY_COUNT,
+      cols: COLS,
+      rows: ROWS,
+      keyW: KEY_W,
+      keyH: KEY_H,
+      tabUpIndex: TAB_UP_INDEX,
+      tabDownIndex: TAB_DOWN_INDEX,
+      sideIndexes: SIDE_INDEXES,
+      soundIndexes: SOUND_INDEXES,
+      stopIndex: STOP_INDEX,
+    },
+    connected: panel?.connected ?? false,
+    configPath: config.CONFIG_PATH,
+  }
+})
 
 ipcMain.handle('save-config', (_e, next) => {
   state = next
@@ -95,12 +134,13 @@ ipcMain.handle('push-images', (_e, images) => {
   }
 })
 
-ipcMain.handle('read-sound', async (_e, path) => {
+// The renderer streams audio straight off disk, so it never asks us for bytes —
+// only for whether a file is still there, so it can grey out a dead key.
+ipcMain.handle('sound-exists', async (_e, path) => {
   try {
-    const buf = await readFile(path)
-    return { ok: true, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) }
-  } catch (err) {
-    return { ok: false, error: err.message }
+    return (await stat(path)).isFile()
+  } catch {
+    return false
   }
 })
 

@@ -34,105 +34,118 @@ const save = () => api.saveConfig(cfg)
 
 // ---------------------------------------------------------------- audio ----
 
-const ctx = new AudioContext()
-const buffers = new Map() // path -> AudioBuffer | null
+// Sounds stream from disk through media elements rather than being decoded
+// into AudioBuffers. That is not a style choice: an hour of ambience decodes to
+// ~1.3 GB of PCM, so preloading one tab of them was allocating ~16 GB and
+// killing the renderer outright — which blanks the window and the panel with it.
+const missing = new Set() // paths that would not play
 
-// At most one loop plays at a time, across every tab. Holding a single slot
-// rather than a map makes that impossible to violate by accident.
-let loop = null // { tab, index, src } | null
+// Any number of loops can run at once, across any tabs.
+const loops = new Map() // "tab:index" -> { tab, index, el }
 
 // One-shots are fire-and-forget, but the stop key has to be able to cut them,
 // so keep the live ones until they end on their own.
 const oneShots = new Set()
 
-const isLooping = (index, tab = cfg.activeTab) => loop?.tab === tab && loop?.index === index
+const loopKey = (tab, index) => `${tab}:${index}`
+const isLooping = (index, tab = cfg.activeTab) => loops.has(loopKey(tab, index))
 
-async function loadSound(path) {
-  if (buffers.has(path)) return buffers.get(path)
-  const res = await api.readSound(path)
-  if (!res.ok) {
-    console.warn(`cannot read ${path}: ${res.error}`)
-    buffers.set(path, null)
-    return null
+// Sound names carry spaces, ampersands and fullwidth bars, so every segment has
+// to be escaped before it can go in a URL.
+const fileUrl = (path) => `file://${path.split('/').map(encodeURIComponent).join('/')}`
+
+function setMissing(path, gone) {
+  if (missing.has(path) === gone) return
+  if (gone) missing.add(path)
+  else missing.delete(path)
+  render()
+}
+
+function play(path, { loop }) {
+  const el = new Audio(fileUrl(path))
+  el.loop = loop
+  const failed = (reason) => {
+    // Tearing an element down raises an error too; only a live one means trouble.
+    if (el.dataset.disposed) return
+    console.warn(`cannot play ${path}: ${reason}`)
+    setMissing(path, true)
   }
-  try {
-    const buf = await ctx.decodeAudioData(res.data)
-    buffers.set(path, buf)
-    return buf
-  } catch (err) {
-    console.warn(`cannot decode ${path}: ${err.message}`)
-    buffers.set(path, null)
-    return null
-  }
+  el.addEventListener('error', () => failed(el.error?.message ?? 'unknown error'))
+  // Clear a stale "missing" mark only once sound is genuinely coming out, so a
+  // key that still can't play never flickers back to looking healthy.
+  el.addEventListener('playing', () => setMissing(path, false))
+  el.play().catch((err) => failed(err.message))
+  return el
 }
 
-/** Stops whatever loop is running. Returns the key it was on, if any. */
-function stopLoop() {
-  if (!loop) return null
-  const was = { tab: loop.tab, index: loop.index }
-  try {
-    loop.src.stop()
-  } catch {}
-  loop = null
-  return was
+/** Stops an element and lets go of its buffers instead of waiting on the GC. */
+function dispose(el) {
+  el.dataset.disposed = '1'
+  el.pause()
+  el.removeAttribute('src')
+  el.load()
 }
 
-function startLoop(tab, index, buf) {
-  const src = ctx.createBufferSource()
-  src.buffer = buf
-  src.loop = true
-  src.connect(ctx.destination)
-  src.start()
-  loop = { tab, index, src }
+/** Stops one loop by tab/index. Returns the key it was on, if any. */
+function stopLoop(tab, index) {
+  const key = loopKey(tab, index)
+  const entry = loops.get(key)
+  if (!entry) return null
+  dispose(entry.el)
+  loops.delete(key)
+  return { tab, index }
 }
 
-/** One-shots layer on top; loops are exclusive and toggle on and off. */
+function startLoop(tab, index, path) {
+  loops.set(loopKey(tab, index), { tab, index, el: play(path, { loop: true }) })
+}
+
+/** One-shots layer on top; a loop key toggles just that loop on and off. */
 async function trigger(index) {
   const k = keyCfg(index)
   if (!k?.sound) return
-  const buf = (await loadSound(k.sound)) ?? null
-  if (!buf) return
 
   if (k.loop) {
     const tab = cfg.activeTab
-    const wasThisKey = isLooping(index, tab)
-    const stopped = stopLoop()
-    if (!wasThisKey) startLoop(tab, index, buf)
+    if (isLooping(index, tab)) stopLoop(tab, index)
+    else startLoop(tab, index, k.sound)
 
     render()
-    // The key that stopped may sit on another tab, where it has no visible
-    // image to correct, so only refresh what is actually on screen.
-    const dirty = new Set([index])
-    if (stopped && stopped.tab === cfg.activeTab) dirty.add(stopped.index)
-    await pushKeys([...dirty])
+    await pushKeys([index])
     return
   }
 
-  const src = ctx.createBufferSource()
-  src.buffer = buf
-  src.connect(ctx.destination)
-  src.addEventListener('ended', () => oneShots.delete(src))
-  oneShots.add(src)
-  src.start()
+  const el = play(k.sound, { loop: false })
+  el.addEventListener('ended', () => {
+    oneShots.delete(el)
+    dispose(el)
+  })
+  oneShots.add(el)
 }
 
-/** Everything off: the running loop and every one-shot still sounding. */
+/** Everything off: every running loop and every one-shot still sounding. */
 async function stopEverything() {
-  const stopped = stopLoop()
-  for (const src of oneShots) {
-    try {
-      src.stop()
-    } catch {}
+  const stoppedOnActiveTab = []
+  for (const { tab, index, el } of loops.values()) {
+    dispose(el)
+    if (tab === cfg.activeTab) stoppedOnActiveTab.push(index)
   }
+  loops.clear()
+  for (const el of oneShots) dispose(el)
   oneShots.clear()
   render()
-  if (stopped && stopped.tab === cfg.activeTab) await refreshKey(stopped.index)
+  if (stoppedOnActiveTab.length) await pushKeys(stoppedOnActiveTab)
 }
 
-async function preloadTab(tab) {
+/** Streaming needs no preload, so a tab only has to be checked for gaps. */
+async function checkTab(tab) {
   const paths = new Set()
   for (const k of Object.values(cfg.tabs[tab]?.keys ?? {})) if (k.sound) paths.add(k.sound)
-  await Promise.all([...paths].map(loadSound))
+  const checked = await Promise.all([...paths].map(async (p) => [p, await api.soundExists(p)]))
+  for (const [path, ok] of checked) {
+    if (ok) missing.delete(path)
+    else missing.add(path)
+  }
 }
 
 // ---------------------------------------------------------------- images ---
@@ -310,7 +323,7 @@ function render() {
     const k = keyCfg(i)
     if (k?.loop) cell.classList.add('loop')
     if (k?.loop && isLooping(i)) cell.classList.add('playing')
-    if (k?.sound && buffers.get(k.sound) === null) cell.classList.add('missing')
+    if (k?.sound && missing.has(k.sound)) cell.classList.add('missing')
 
     const label = document.createElement('div')
     label.className = 'label'
@@ -369,7 +382,7 @@ async function switchTab(tab) {
   if (tab === cfg.activeTab) return
   cfg.activeTab = tab
   save()
-  await preloadTab(tab)
+  await checkTab(tab)
   // Loops keep running across tab switches, so ambience survives a hop to
   // another tab; their key lights up again when you come back.
   if (selected?.kind === 'key') selected = null
@@ -408,7 +421,7 @@ tabNameInput.addEventListener('change', () => {
 
 loopToggle.addEventListener('change', () => {
   if (selected?.kind !== 'key') return
-  if (!loopToggle.checked && isLooping(selected.index)) stopLoop()
+  if (!loopToggle.checked && isLooping(selected.index)) stopLoop(cfg.activeTab, selected.index)
   patchKey({ loop: loopToggle.checked })
   render()
   refreshKey(selected.index)
@@ -418,9 +431,9 @@ document.getElementById('pickBtn').addEventListener('click', async () => {
   if (selected?.kind !== 'key') return
   const path = await api.pickSound()
   if (!path) return
-  if (isLooping(selected.index)) stopLoop()
+  if (isLooping(selected.index)) stopLoop(cfg.activeTab, selected.index)
   patchKey({ sound: path })
-  await loadSound(path)
+  missing.delete(path)
   sndPath.textContent = path
   render()
 })
@@ -431,7 +444,7 @@ document.getElementById('testBtn').addEventListener('click', () => {
 
 document.getElementById('clearBtn').addEventListener('click', () => {
   if (selected?.kind !== 'key') return
-  if (isLooping(selected.index)) stopLoop()
+  if (isLooping(selected.index)) stopLoop(cfg.activeTab, selected.index)
   delete activeTab().keys[selected.index]
   save()
   labelInput.value = ''
@@ -461,7 +474,12 @@ api.onKey((index) => {
   else trigger(index)
 })
 
-api.onStatus(({ connected, message }) => setStatus(connected, message))
+api.onStatus(({ connected, message }) => {
+  setStatus(connected, message)
+  // The panel wakes and clears itself on every (re)connect, so whatever we
+  // pushed before that moment is gone — repaint once it's back.
+  if (connected && cfg) pushAll()
+})
 
 function setStatus(connected, message) {
   statusEl.className = connected ? 'good' : 'bad'
@@ -491,6 +509,6 @@ brightness.value = cfg.device?.brightness ?? 60
 brightnessVal.textContent = brightness.value
 setStatus(state.connected, state.connected ? 'Connected' : 'Panel not found')
 render()
-await preloadTab(cfg.activeTab)
+await checkTab(cfg.activeTab)
 render()
 await pushAll()

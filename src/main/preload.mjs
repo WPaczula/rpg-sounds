@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('gk150', {
   setBrightness: (pct) => ipcRenderer.invoke('set-brightness', pct),
   pickSound: () => ipcRenderer.invoke('pick-sound'),
   pushImages: (images) => ipcRenderer.invoke('push-images', images),
-  readSound: (path) => ipcRenderer.invoke('read-sound', path),
+  soundExists: (path) => ipcRenderer.invoke('sound-exists', path),
   openInputMonitoring: () => ipcRenderer.invoke('open-input-monitoring'),
   openConfig: () => ipcRenderer.invoke('open-config'),
 

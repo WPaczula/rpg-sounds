@@ -2,5 +2,10 @@ node_modules/
 dist/
 .DS_Store
 
+# Audio files are large and personal — keep the sounds/ folder structure in
+# git (via .gitkeep) but never the actual tracks.
+sounds/*/*
+!sounds/*/.gitkeep
+
 # compiled TCC access probe
 spike/hidaccess
