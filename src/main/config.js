@@ -71,13 +71,31 @@ function buildFolderTabs() {
 /** Drop stale generated tabs and replace them with a fresh scan of sounds/. */
 const withGeneratedTabs = (tabs) => [...tabs.filter((t) => !t.generated), ...buildFolderTabs()]
 
+// Presets are scenes: one key layers several sounds borrowed from other tabs.
+// The tab is hand-built rather than folder-derived, and sits right below
+// Effects so a campaign's scenes are one arrow press from the top.
+export const PRESETS_TAB_NAME = 'Presets'
+
+function withPresetsTab(tabs) {
+  if (tabs.some((t) => t.presets)) return tabs
+  const next = [...tabs]
+  next.splice(tabs.findIndex((t) => t.name === 'Effects') + 1, 0, {
+    name: PRESETS_TAB_NAME,
+    keys: {},
+    presets: true,
+  })
+  return next
+}
+
 const defaults = () => ({
   device: { brightness: 60 },
   activeTab: 0,
-  tabs: withGeneratedTabs([
-    { name: 'Effects', keys: {} },
-    { name: 'Fight', keys: {} },
-  ]),
+  tabs: withGeneratedTabs(
+    withPresetsTab([
+      { name: 'Effects', keys: {} },
+      { name: 'Fight', keys: {} },
+    ]),
+  ),
 })
 
 /** Bring older single-page configs forward into the tabbed shape. */
@@ -89,6 +107,7 @@ function migrate(parsed) {
     // "Background" was a static default tab; folder-derived tabs (Ambience,
     // etc.) supersede it, so drop any leftover copy from older configs.
     parsed.tabs = parsed.tabs.filter((t) => t.generated || t.name !== 'Background')
+    parsed.tabs = withPresetsTab(parsed.tabs)
     return parsed
   }
   const next = defaults()

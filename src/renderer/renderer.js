@@ -13,6 +13,11 @@ const editor = document.getElementById('editor')
 const editorTitle = document.getElementById('editorTitle')
 const keyFields = document.getElementById('keyFields')
 const tabFields = document.getElementById('tabFields')
+const presetFields = document.getElementById('presetFields')
+const presetNameInput = document.getElementById('presetNameInput')
+const presetMembers = document.getElementById('presetMembers')
+const presetLibrary = document.getElementById('presetLibrary')
+const presetSearch = document.getElementById('presetSearch')
 const labelInput = document.getElementById('labelInput')
 const tabNameInput = document.getElementById('tabNameInput')
 const loopToggle = document.getElementById('loopToggle')
@@ -40,15 +45,20 @@ const save = () => api.saveConfig(cfg)
 // killing the renderer outright — which blanks the window and the panel with it.
 const missing = new Set() // paths that would not play
 
-// Any number of loops can run at once, across any tabs.
-const loops = new Map() // "tab:index" -> { tab, index, el }
+// Any number of loops can run at once, across any tabs. They are keyed by
+// sound path rather than by key: a preset and the key it borrowed a sound from
+// then share one playing loop, so the same file can never stack over itself and
+// both keys light up together.
+const loops = new Map() // sound path -> element
 
 // One-shots are fire-and-forget, but the stop key has to be able to cut them,
 // so keep the live ones until they end on their own.
 const oneShots = new Set()
 
-const loopKey = (tab, index) => `${tab}:${index}`
-const isLooping = (index, tab = cfg.activeTab) => loops.has(loopKey(tab, index))
+const isLooping = (index, tab = cfg.activeTab) => {
+  const sound = keyCfg(index, tab)?.sound
+  return !!sound && loops.has(sound)
+}
 
 // Sound names carry spaces, ampersands and fullwidth bars, so every segment has
 // to be escaped before it can go in a URL.
@@ -61,9 +71,10 @@ function setMissing(path, gone) {
   render()
 }
 
-function play(path, { loop }) {
+function play(path, { loop, volume = 1 }) {
   const el = new Audio(fileUrl(path))
   el.loop = loop
+  el.volume = clampVol(volume)
   const failed = (reason) => {
     // Tearing an element down raises an error too; only a live one means trouble.
     if (el.dataset.disposed) return
@@ -86,32 +97,72 @@ function dispose(el) {
   el.load()
 }
 
-/** Stops one loop by tab/index. Returns the key it was on, if any. */
-function stopLoop(tab, index) {
-  const key = loopKey(tab, index)
-  const entry = loops.get(key)
-  if (!entry) return null
-  dispose(entry.el)
-  loops.delete(key)
-  return { tab, index }
+const clampVol = (v) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 1))
+
+/**
+ * Starts a looping sound unless it is already running. A path already playing
+ * still takes the new volume, so re-pressing a preset re-asserts its mix.
+ */
+function startPath(path, volume = 1) {
+  const running = loops.get(path)
+  if (running) {
+    running.volume = clampVol(volume)
+    return false
+  }
+  loops.set(path, play(path, { loop: true, volume }))
+  return true
 }
 
-function startLoop(tab, index, path) {
-  loops.set(loopKey(tab, index), { tab, index, el: play(path, { loop: true }) })
+/** Live volume change for a sound that may or may not be playing right now. */
+function setPathVolume(path, volume) {
+  const el = loops.get(path)
+  if (el) el.volume = clampVol(volume)
+}
+
+function stopPath(path) {
+  const el = loops.get(path)
+  if (!el) return false
+  dispose(el)
+  loops.delete(path)
+  return true
+}
+
+const stopKeyLoop = (index, tab = cfg.activeTab) => {
+  const sound = keyCfg(index, tab)?.sound
+  if (sound) stopPath(sound)
+}
+
+/**
+ * Keys on the active tab whose appearance depends on any of these paths —
+ * the key that owns the sound, and every preset that layers it.
+ */
+function dirtyKeys(paths) {
+  const changed = new Set(paths)
+  const dirty = []
+  for (const [i, k] of Object.entries(activeTab()?.keys ?? {})) {
+    const touched =
+      (k.sound && changed.has(k.sound)) || (k.preset ?? []).some((m) => changed.has(m.sound))
+    if (touched) dirty.push(Number(i))
+  }
+  return dirty
 }
 
 /** One-shots layer on top; a loop key toggles just that loop on and off. */
 async function trigger(index) {
   const k = keyCfg(index)
-  if (!k?.sound) return
+  if (isPresetTab() ? !presetLayers(k).length : !k?.sound) return
+
+  if (isPresetTab()) {
+    await togglePreset(k)
+    return
+  }
 
   if (k.loop) {
-    const tab = cfg.activeTab
-    if (isLooping(index, tab)) stopLoop(tab, index)
-    else startLoop(tab, index, k.sound)
+    if (loops.has(k.sound)) stopPath(k.sound)
+    else startPath(k.sound)
 
     render()
-    await pushKeys([index])
+    await pushKeys(dirtyKeys([k.sound]))
     return
   }
 
@@ -125,22 +176,67 @@ async function trigger(index) {
 
 /** Everything off: every running loop and every one-shot still sounding. */
 async function stopEverything() {
-  const stoppedOnActiveTab = []
-  for (const { tab, index, el } of loops.values()) {
-    dispose(el)
-    if (tab === cfg.activeTab) stoppedOnActiveTab.push(index)
-  }
+  const stopped = [...loops.keys()]
+  for (const el of loops.values()) dispose(el)
   loops.clear()
   for (const el of oneShots) dispose(el)
   oneShots.clear()
   render()
-  if (stoppedOnActiveTab.length) await pushKeys(stoppedOnActiveTab)
+  if (stopped.length) await pushKeys(dirtyKeys(stopped))
 }
+
+// -------------------------------------------------------------- presets ----
+
+const isPresetTab = (tab = cfg.activeTab) => !!cfg.tabs[tab]?.presets
+const presetLayers = (k) => k?.preset ?? []
+
+// Layers written before per-layer volume existed carry none; those play full.
+const layerVol = (m) => clampVol(m.volume ?? 1)
+
+/** A preset reads as "on" only once every layer it names is sounding. */
+const presetActive = (k) => {
+  const layers = presetLayers(k)
+  return layers.length > 0 && layers.every((m) => loops.has(m.sound))
+}
+
+/**
+ * Presets add to whatever is already playing rather than replacing it, so two
+ * scenes can be stacked (rain over a tavern) and peeled off one at a time.
+ */
+async function togglePreset(k) {
+  const layers = presetLayers(k)
+  if (!layers.length) return
+  const on = !presetActive(k)
+  const changed = []
+  for (const m of layers) {
+    if (on ? startPath(m.sound, layerVol(m)) : stopPath(m.sound)) changed.push(m.sound)
+  }
+  render()
+  if (changed.length) await pushKeys(dirtyKeys(changed))
+}
+
+/** Every sound bound to a key on a normal tab, as preset-building material. */
+function library() {
+  const out = []
+  for (const tab of cfg.tabs) {
+    if (tab.presets) continue
+    for (const [i, k] of Object.entries(tab.keys ?? {})) {
+      if (k.sound) out.push({ tab: tab.name, label: k.label || `key ${i}`, sound: k.sound })
+    }
+  }
+  return out
+}
+
+const layerLabel = (path) =>
+  library().find((e) => e.sound === path)?.label ?? path.split('/').pop()
 
 /** Streaming needs no preload, so a tab only has to be checked for gaps. */
 async function checkTab(tab) {
   const paths = new Set()
-  for (const k of Object.values(cfg.tabs[tab]?.keys ?? {})) if (k.sound) paths.add(k.sound)
+  for (const k of Object.values(cfg.tabs[tab]?.keys ?? {})) {
+    if (k.sound) paths.add(k.sound)
+    for (const m of k.preset ?? []) paths.add(m.sound)
+  }
   const checked = await Promise.all([...paths].map(async (p) => [p, await api.soundExists(p)]))
   for (const [path, ok] of checked) {
     if (ok) missing.delete(path)
@@ -153,6 +249,9 @@ async function checkTab(tab) {
 const STYLE = {
   idle: { bg: '#101820', fg: '#ffffff' },
   loop: { bg: '#101820', fg: '#ffffff', bar: '#5b8cff' },
+  // A violet bar marks a scene, so presets read differently from plain loops
+  // at a glance without changing the panel's palette.
+  preset: { bg: '#101820', fg: '#ffffff', bar: '#9a6bff' },
   playing: { bg: '#f2c318', fg: '#000000' },
   arrow: { bg: '#101820', fg: '#8b929e' },
   lcdSide: { bg: '#0b0d10', fg: '#5a616d' },
@@ -233,6 +332,10 @@ function styleFor(i) {
   if (isTabUp(i) || isTabDown(i)) return STYLE.arrow
   const k = keyCfg(i)
   if (!k) return STYLE.idle
+  if (isPresetTab()) {
+    if (!presetLayers(k).length) return STYLE.idle
+    return presetActive(k) ? STYLE.playing : STYLE.preset
+  }
   if (k.loop && isLooping(i)) return STYLE.playing
   if (k.loop) return STYLE.loop
   return STYLE.idle
@@ -321,16 +424,31 @@ function render() {
     }
 
     const k = keyCfg(i)
-    if (k?.loop) cell.classList.add('loop')
-    if (k?.loop && isLooping(i)) cell.classList.add('playing')
-    if (k?.sound && missing.has(k.sound)) cell.classList.add('missing')
+    const layers = isPresetTab() ? presetLayers(k) : []
+
+    if (isPresetTab()) {
+      if (layers.length) cell.classList.add('preset')
+      if (presetActive(k)) cell.classList.add('playing')
+      if (layers.some((m) => missing.has(m.sound))) cell.classList.add('missing')
+    } else {
+      if (k?.loop) cell.classList.add('loop')
+      if (k?.loop && isLooping(i)) cell.classList.add('playing')
+      if (k?.sound && missing.has(k.sound)) cell.classList.add('missing')
+    }
 
     const label = document.createElement('div')
     label.className = 'label'
     label.textContent = k?.label ?? ''
     cell.appendChild(label)
 
-    if (k?.sound) {
+    if (isPresetTab()) {
+      if (layers.length) {
+        const snd = document.createElement('div')
+        snd.className = 'snd'
+        snd.textContent = layers.map((m) => layerLabel(m.sound)).join(' + ')
+        cell.appendChild(snd)
+      }
+    } else if (k?.sound) {
       const snd = document.createElement('div')
       snd.className = 'snd'
       snd.textContent = k.sound.split('/').pop()
@@ -339,36 +457,150 @@ function render() {
 
     const idx = document.createElement('div')
     idx.className = 'idx'
-    idx.textContent = k?.loop ? 'loop' : ''
+    idx.textContent = isPresetTab()
+      ? layers.length
+        ? `${layers.length} layer${layers.length > 1 ? 's' : ''}`
+        : 'empty preset'
+      : k?.loop
+        ? 'loop'
+        : ''
     cell.appendChild(idx)
 
     cell.addEventListener('click', () => select(i))
     grid.appendChild(cell)
   }
+
+  // The builder shows which layers are sounding, so it follows the grid.
+  if (selected?.kind === 'preset') renderPreset()
 }
 
 function select(i) {
   if (isStop(i)) return
   editor.classList.remove('hidden')
+  tabFields.classList.add('hidden')
+  keyFields.classList.add('hidden')
+  presetFields.classList.add('hidden')
+
   if (isSide(i)) {
     // Only the middle LCD cell (the active tab) is selectable; it opens the
     // rename field for whichever tab is currently active.
     selected = { kind: 'tab', index: i, tab: cfg.activeTab }
     editorTitle.textContent = `Tab ${cfg.activeTab + 1}`
-    keyFields.classList.add('hidden')
     tabFields.classList.remove('hidden')
     tabNameInput.value = activeTab()?.name ?? ''
+  } else if (isPresetTab()) {
+    selected = { kind: 'preset', index: i, tab: cfg.activeTab }
+    editorTitle.textContent = `${activeTab().name} — preset ${i}`
+    presetFields.classList.remove('hidden')
+    presetNameInput.value = keyCfg(i)?.label ?? ''
+    renderPreset()
   } else {
     selected = { kind: 'key', index: i, tab: cfg.activeTab }
     const k = keyCfg(i) ?? {}
     editorTitle.textContent = `${activeTab().name} — key ${i}`
-    tabFields.classList.add('hidden')
     keyFields.classList.remove('hidden')
     labelInput.value = k.label ?? ''
     loopToggle.checked = !!k.loop
     sndPath.textContent = k.sound ?? 'No sound assigned'
   }
   render()
+}
+
+// ------------------------------------------------------- preset builder ----
+
+/** Rewrites the selected preset's layers and repaints everything that shows them. */
+function setLayers(layers) {
+  patchKey({ preset: layers.length ? layers : null })
+  render()
+  refreshKey(selected.index)
+}
+
+function renderPreset() {
+  if (selected?.kind !== 'preset') return
+  const layers = presetLayers(keyCfg(selected.index))
+  const chosen = new Set(layers.map((m) => m.sound))
+
+  presetMembers.innerHTML = ''
+  if (!layers.length) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = 'No layers yet — tick sounds below, or play a mix and capture it.'
+    presetMembers.appendChild(empty)
+  }
+  for (const m of layers) {
+    const chip = document.createElement('div')
+    chip.className = `chip${loops.has(m.sound) ? ' on' : ''}${missing.has(m.sound) ? ' gone' : ''}`
+
+    const name = document.createElement('span')
+    name.className = 'chipName'
+    name.textContent = layerLabel(m.sound)
+    chip.appendChild(name)
+
+    const vol = document.createElement('input')
+    vol.type = 'range'
+    vol.min = 0
+    vol.max = 100
+    vol.value = Math.round(layerVol(m) * 100)
+    vol.title = 'Layer volume'
+    const readout = document.createElement('span')
+    readout.className = 'chipVol'
+    readout.textContent = `${vol.value}%`
+    // Dragging is audible immediately; the config is only rewritten on release
+    // so a slow drag doesn't rewrite the file on every pixel.
+    vol.oninput = () => {
+      readout.textContent = `${vol.value}%`
+      setPathVolume(m.sound, vol.value / 100)
+    }
+    vol.onchange = () => {
+      const current = presetLayers(keyCfg(selected.index))
+      setLayers(
+        current.map((x) => (x.sound === m.sound ? { ...x, volume: vol.value / 100 } : x)),
+      )
+    }
+    chip.appendChild(vol)
+    chip.appendChild(readout)
+
+    const drop = document.createElement('button')
+    drop.textContent = '×'
+    drop.title = 'Remove layer'
+    drop.onclick = () => setLayers(layers.filter((x) => x.sound !== m.sound))
+    chip.appendChild(drop)
+    presetMembers.appendChild(chip)
+  }
+
+  const needle = presetSearch.value.trim().toLowerCase()
+  presetLibrary.innerHTML = ''
+  let shown = 0
+  for (const entry of library()) {
+    const hay = `${entry.tab} ${entry.label}`.toLowerCase()
+    // A layer already in the preset stays listed even when filtered out, so
+    // ticking a box never makes the row you just clicked vanish.
+    if (needle && !hay.includes(needle) && !chosen.has(entry.sound)) continue
+    if (++shown > 400) break
+
+    const row = document.createElement('label')
+    row.className = 'libRow'
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = chosen.has(entry.sound)
+    box.onchange = () => {
+      const current = presetLayers(keyCfg(selected.index))
+      setLayers(
+        box.checked
+          ? [...current, { sound: entry.sound }]
+          : current.filter((x) => x.sound !== entry.sound),
+      )
+    }
+    row.appendChild(box)
+    const name = document.createElement('span')
+    name.textContent = entry.label
+    row.appendChild(name)
+    const from = document.createElement('span')
+    from.className = 'libTab'
+    from.textContent = entry.tab
+    row.appendChild(from)
+    presetLibrary.appendChild(row)
+  }
 }
 
 function flash(i) {
@@ -385,7 +617,7 @@ async function switchTab(tab) {
   await checkTab(tab)
   // Loops keep running across tab switches, so ambience survives a hop to
   // another tab; their key lights up again when you come back.
-  if (selected?.kind === 'key') selected = null
+  if (selected?.kind === 'key' || selected?.kind === 'preset') selected = null
   editor.classList.add('hidden')
   render()
   await pushAll()
@@ -421,7 +653,7 @@ tabNameInput.addEventListener('change', () => {
 
 loopToggle.addEventListener('change', () => {
   if (selected?.kind !== 'key') return
-  if (!loopToggle.checked && isLooping(selected.index)) stopLoop(cfg.activeTab, selected.index)
+  if (!loopToggle.checked) stopKeyLoop(selected.index)
   patchKey({ loop: loopToggle.checked })
   render()
   refreshKey(selected.index)
@@ -431,7 +663,7 @@ document.getElementById('pickBtn').addEventListener('click', async () => {
   if (selected?.kind !== 'key') return
   const path = await api.pickSound()
   if (!path) return
-  if (isLooping(selected.index)) stopLoop(cfg.activeTab, selected.index)
+  stopKeyLoop(selected.index)
   patchKey({ sound: path })
   missing.delete(path)
   sndPath.textContent = path
@@ -444,12 +676,44 @@ document.getElementById('testBtn').addEventListener('click', () => {
 
 document.getElementById('clearBtn').addEventListener('click', () => {
   if (selected?.kind !== 'key') return
-  if (isLooping(selected.index)) stopLoop(cfg.activeTab, selected.index)
+  stopKeyLoop(selected.index)
   delete activeTab().keys[selected.index]
   save()
   labelInput.value = ''
   loopToggle.checked = false
   sndPath.textContent = 'No sound assigned'
+  render()
+  refreshKey(selected.index)
+})
+
+// -------------------------------------------------------- preset events ----
+
+presetNameInput.addEventListener('change', () => {
+  if (selected?.kind !== 'preset') return
+  patchKey({ label: presetNameInput.value.trim() })
+  render()
+  refreshKey(selected.index)
+})
+
+presetSearch.addEventListener('input', () => renderPreset())
+
+// Building by ear: layer sounds live from their own tabs, balance them, then
+// freeze the mix — volumes included — onto one key.
+document.getElementById('captureBtn').addEventListener('click', () => {
+  if (selected?.kind !== 'preset') return
+  setLayers([...loops.entries()].map(([sound, el]) => ({ sound, volume: el.volume })))
+})
+
+document.getElementById('testPresetBtn').addEventListener('click', () => {
+  if (selected?.kind === 'preset') trigger(selected.index)
+})
+
+document.getElementById('clearPresetBtn').addEventListener('click', () => {
+  if (selected?.kind !== 'preset') return
+  delete activeTab().keys[selected.index]
+  save()
+  presetNameInput.value = ''
+  renderPreset()
   render()
   refreshKey(selected.index)
 })

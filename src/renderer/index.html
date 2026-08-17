@@ -75,6 +75,41 @@
       }
       button.act:hover { background: #333845; }
       .sndpath { color: #7b828e; margin-top: 10px; word-break: break-all; }
+
+      .cell.preset { border-color: #5a3a90; }
+      .hint { color: #7b828e; margin: 10px 0 0; line-height: 1.5; }
+      .fieldLabel { color: #8b929e; margin: 16px 0 6px; }
+
+      .members { display: flex; flex-direction: column; gap: 6px; }
+      .members .empty { color: #7b828e; }
+      .chip {
+        display: flex; align-items: center; gap: 10px; padding: 6px 8px;
+        border-radius: 5px; background: #14161a; border: 1px solid #3a3f4a;
+      }
+      .chip.on { border-color: #f2c318; }
+      .chip.gone { border-color: #6b2d2d; }
+      .chip .chipName { flex: 1; min-width: 0; word-break: break-word; }
+      .chip input[type=range] { width: 130px; flex: none; }
+      .chip .chipVol { color: #7b828e; width: 36px; text-align: right; }
+      .chip button {
+        background: none; border: none; color: #7b828e; cursor: pointer;
+        font-size: 15px; line-height: 1; padding: 0 2px;
+      }
+      .chip button:hover { color: #e6e8ec; }
+
+      .library {
+        max-height: 240px; overflow-y: auto; border: 1px solid #3a3f4a;
+        border-radius: 5px; background: #14161a;
+      }
+      /* Scoped by id: the generic "#editor label" rule above would otherwise
+         win on specificity and flatten these rows back to display:block. */
+      #editor .libRow {
+        display: flex; align-items: center; gap: 8px; padding: 5px 9px;
+        margin: 0; color: #e6e8ec; cursor: pointer;
+      }
+      #editor .libRow:hover { background: #1d2027; }
+      #editor .libRow span:first-of-type { flex: 1; min-width: 0; word-break: break-word; }
+      #editor .libRow .libTab { color: #7b828e; flex: none; }
       .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; max-width: 720px; }
       .row input[type=range] { flex: 1; }
     </style>
@@ -105,6 +140,26 @@
         <button class="act" id="testBtn">Test</button>
         <button class="act" id="clearBtn">Clear key</button>
         <div class="sndpath" id="sndPath">No sound assigned</div>
+      </div>
+
+      <div id="presetFields" class="hidden">
+        <label>Preset name (shown on the key's screen)</label>
+        <input type="text" id="presetNameInput" placeholder="e.g. Tavern brawl" />
+
+        <button class="act" id="captureBtn">Capture what's playing</button>
+        <button class="act" id="testPresetBtn">Play / stop</button>
+        <button class="act" id="clearPresetBtn">Clear preset</button>
+        <div class="hint">
+          A preset layers sounds from your other tabs and starts them together — pressing it
+          again stops just its own layers, so scenes can be stacked.
+        </div>
+
+        <div class="fieldLabel">Layers</div>
+        <div id="presetMembers" class="members"></div>
+
+        <div class="fieldLabel">Add layers</div>
+        <input type="text" id="presetSearch" placeholder="Search sounds…" />
+        <div id="presetLibrary" class="library"></div>
       </div>
     </div>
 
