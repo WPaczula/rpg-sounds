@@ -1,9 +1,9 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { TAB_INDEXES, SIDE_INDEXES, STOP_INDEX } from './device.js'
+import { TAB_UP_INDEX, TAB_DOWN_INDEX, SIDE_INDEXES, STOP_INDEX } from './device.js'
 
-const RESERVED = new Set([...TAB_INDEXES, ...SIDE_INDEXES, STOP_INDEX])
+const RESERVED = new Set([TAB_UP_INDEX, TAB_DOWN_INDEX, ...SIDE_INDEXES, STOP_INDEX])
 
 /** Strip bindings on keys that are reserved for tabs or are output-only. */
 const usableKeys = (keys = {}) =>

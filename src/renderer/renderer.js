@@ -2,8 +2,9 @@ const api = window.gk150
 
 let cfg = null
 let layout = null
-let tabIdx = [] // panel indexes of the three tab-selector keys
-let sideIdx = [] // output-only keys: screens, but no input
+let tabUpIdx = -1 // panel index of the "previous tab" arrow key
+let tabDownIdx = -1 // panel index of the "next tab" arrow key
+let sideIdx = [] // output-only LCD strip: [above, active, below] tab names
 let stopIdx = -1 // panel index of the stop-everything key
 let selected = null // { kind: 'key' | 'tab', index, tab }
 
@@ -20,10 +21,12 @@ const statusEl = document.getElementById('status')
 const brightness = document.getElementById('brightness')
 const brightnessVal = document.getElementById('brightnessVal')
 
-const isTab = (i) => tabIdx.includes(i)
+const isTabUp = (i) => i === tabUpIdx
+const isTabDown = (i) => i === tabDownIdx
 const isSide = (i) => sideIdx.includes(i)
 const isStop = (i) => i === stopIdx
-const tabOf = (i) => tabIdx.indexOf(i)
+const prevTab = () => (cfg.activeTab - 1 + cfg.tabs.length) % cfg.tabs.length
+const nextTab = () => (cfg.activeTab + 1) % cfg.tabs.length
 const activeTab = () => cfg.tabs[cfg.activeTab]
 const keyCfg = (i, tab = cfg.activeTab) => cfg.tabs[tab]?.keys?.[i]
 
@@ -138,12 +141,15 @@ const STYLE = {
   idle: { bg: '#101820', fg: '#ffffff' },
   loop: { bg: '#101820', fg: '#ffffff', bar: '#5b8cff' },
   playing: { bg: '#f2c318', fg: '#000000' },
-  tab: { bg: '#101820', fg: '#8b929e' },
-  tabActive: { bg: '#ffffff', fg: '#000000' },
+  arrow: { bg: '#101820', fg: '#8b929e' },
+  lcdSide: { bg: '#0b0d10', fg: '#5a616d' },
+  lcdActive: { bg: '#0b0d10', fg: '#ffffff' },
   // The panel is always backlit, so a fully black image is as close to "off"
   // as the hardware allows.
   off: { bg: '#000000', fg: '#000000' },
-  stop: { bg: '#8c1d1d', fg: '#ffffff' },
+  // Kept dark and neutral rather than red — a hard red stop key reads as an
+  // alarm, which is the wrong tone for muting a soundboard.
+  stop: { bg: '#101820', fg: '#ffffff' },
 }
 
 // The panel expects each key image rotated 270 degrees clockwise. Verified on
@@ -209,9 +215,9 @@ function wrap(g, text, maxW, maxLines) {
 }
 
 function styleFor(i) {
-  if (isSide(i)) return STYLE.off
+  if (isSide(i)) return sideIdx.indexOf(i) === 1 ? STYLE.lcdActive : STYLE.lcdSide
   if (isStop(i)) return STYLE.stop
-  if (isTab(i)) return tabOf(i) === cfg.activeTab ? STYLE.tabActive : STYLE.tab
+  if (isTabUp(i) || isTabDown(i)) return STYLE.arrow
   const k = keyCfg(i)
   if (!k) return STYLE.idle
   if (k.loop && isLooping(i)) return STYLE.playing
@@ -220,9 +226,16 @@ function styleFor(i) {
 }
 
 function textFor(i) {
-  if (isSide(i)) return ''
-  if (isStop(i)) return 'STOP'
-  return isTab(i) ? (cfg.tabs[tabOf(i)]?.name ?? '') : (keyCfg(i)?.label ?? '')
+  if (isSide(i)) {
+    const slot = sideIdx.indexOf(i)
+    if (slot === 0) return cfg.tabs[prevTab()]?.name ?? ''
+    if (slot === 2) return cfg.tabs[nextTab()]?.name ?? ''
+    return activeTab()?.name ?? ''
+  }
+  if (isStop(i)) return '⏹️'
+  if (isTabUp(i)) return '⬆️'
+  if (isTabDown(i)) return '⬇️'
+  return keyCfg(i)?.label ?? ''
 }
 
 async function pushKeys(indexes) {
@@ -247,11 +260,19 @@ function render() {
     if (selected?.index === i) cell.classList.add('selected')
 
     if (isSide(i)) {
-      cell.classList.add('off')
+      const slot = sideIdx.indexOf(i)
+      cell.classList.add('lcd')
+      if (slot === 1) cell.classList.add('active')
+      const name = document.createElement('div')
+      name.className = 'label'
+      name.textContent = slot === 0 ? cfg.tabs[prevTab()]?.name ?? '' : slot === 2 ? cfg.tabs[nextTab()]?.name ?? '' : activeTab()?.name ?? ''
+      cell.appendChild(name)
       const sub = document.createElement('div')
       sub.className = 'idx'
-      sub.textContent = 'no input'
+      sub.textContent = slot === 0 ? 'tab above' : slot === 2 ? 'tab below' : 'current tab'
       cell.appendChild(sub)
+      if (slot === 1) cell.addEventListener('click', () => select(i))
+      else cell.addEventListener('click', () => switchTab(slot === 0 ? prevTab() : nextTab()))
       grid.appendChild(cell)
       continue
     }
@@ -260,51 +281,53 @@ function render() {
       cell.classList.add('stopkey')
       const name = document.createElement('div')
       name.className = 'label'
-      name.textContent = 'STOP'
+      name.textContent = '⏹️'
       cell.appendChild(name)
       const sub = document.createElement('div')
       sub.className = 'idx'
-      sub.textContent = 'all sounds'
+      sub.textContent = 'stop all'
       cell.appendChild(sub)
       cell.addEventListener('click', () => stopEverything())
       grid.appendChild(cell)
       continue
     }
 
-    if (isTab(i)) {
-      cell.classList.add('tab')
-      if (tabOf(i) === cfg.activeTab) cell.classList.add('active')
+    if (isTabUp(i) || isTabDown(i)) {
+      cell.classList.add('arrow')
       const name = document.createElement('div')
       name.className = 'label'
-      name.textContent = cfg.tabs[tabOf(i)]?.name ?? ''
+      name.textContent = isTabUp(i) ? '⬆️' : '⬇️'
       cell.appendChild(name)
       const sub = document.createElement('div')
       sub.className = 'idx'
-      sub.textContent = 'tab'
+      sub.textContent = isTabUp(i) ? 'prev tab' : 'next tab'
       cell.appendChild(sub)
-    } else {
-      const k = keyCfg(i)
-      if (k?.loop) cell.classList.add('loop')
-      if (k?.loop && isLooping(i)) cell.classList.add('playing')
-      if (k?.sound && buffers.get(k.sound) === null) cell.classList.add('missing')
-
-      const label = document.createElement('div')
-      label.className = 'label'
-      label.textContent = k?.label ?? ''
-      cell.appendChild(label)
-
-      if (k?.sound) {
-        const snd = document.createElement('div')
-        snd.className = 'snd'
-        snd.textContent = k.sound.split('/').pop()
-        cell.appendChild(snd)
-      }
-
-      const idx = document.createElement('div')
-      idx.className = 'idx'
-      idx.textContent = k?.loop ? 'loop' : ''
-      cell.appendChild(idx)
+      cell.addEventListener('click', () => switchTab(isTabUp(i) ? prevTab() : nextTab()))
+      grid.appendChild(cell)
+      continue
     }
+
+    const k = keyCfg(i)
+    if (k?.loop) cell.classList.add('loop')
+    if (k?.loop && isLooping(i)) cell.classList.add('playing')
+    if (k?.sound && buffers.get(k.sound) === null) cell.classList.add('missing')
+
+    const label = document.createElement('div')
+    label.className = 'label'
+    label.textContent = k?.label ?? ''
+    cell.appendChild(label)
+
+    if (k?.sound) {
+      const snd = document.createElement('div')
+      snd.className = 'snd'
+      snd.textContent = k.sound.split('/').pop()
+      cell.appendChild(snd)
+    }
+
+    const idx = document.createElement('div')
+    idx.className = 'idx'
+    idx.textContent = k?.loop ? 'loop' : ''
+    cell.appendChild(idx)
 
     cell.addEventListener('click', () => select(i))
     grid.appendChild(cell)
@@ -312,14 +335,16 @@ function render() {
 }
 
 function select(i) {
-  if (isSide(i) || isStop(i)) return
+  if (isStop(i)) return
   editor.classList.remove('hidden')
-  if (isTab(i)) {
-    selected = { kind: 'tab', index: i, tab: tabOf(i) }
-    editorTitle.textContent = `Tab ${tabOf(i) + 1}`
+  if (isSide(i)) {
+    // Only the middle LCD cell (the active tab) is selectable; it opens the
+    // rename field for whichever tab is currently active.
+    selected = { kind: 'tab', index: i, tab: cfg.activeTab }
+    editorTitle.textContent = `Tab ${cfg.activeTab + 1}`
     keyFields.classList.add('hidden')
     tabFields.classList.remove('hidden')
-    tabNameInput.value = cfg.tabs[tabOf(i)]?.name ?? ''
+    tabNameInput.value = activeTab()?.name ?? ''
   } else {
     selected = { kind: 'key', index: i, tab: cfg.activeTab }
     const k = keyCfg(i) ?? {}
@@ -404,10 +429,6 @@ document.getElementById('testBtn').addEventListener('click', () => {
   if (selected?.kind === 'key') trigger(selected.index)
 })
 
-document.getElementById('switchBtn').addEventListener('click', () => {
-  if (selected?.kind === 'tab') switchTab(selected.tab)
-})
-
 document.getElementById('clearBtn').addEventListener('click', () => {
   if (selected?.kind !== 'key') return
   if (isLooping(selected.index)) stopLoop()
@@ -435,7 +456,8 @@ api.onKey((index) => {
   if (isSide(index)) return
   flash(index)
   if (isStop(index)) stopEverything()
-  else if (isTab(index)) switchTab(tabOf(index))
+  else if (isTabUp(index)) switchTab(prevTab())
+  else if (isTabDown(index)) switchTab(nextTab())
   else trigger(index)
 })
 
@@ -461,7 +483,8 @@ function setStatus(connected, message) {
 const state = await api.getState()
 cfg = state.config
 layout = state.layout
-tabIdx = layout.tabIndexes
+tabUpIdx = layout.tabUpIndex
+tabDownIdx = layout.tabDownIndex
 sideIdx = layout.sideIndexes
 stopIdx = layout.stopIndex
 brightness.value = cfg.device?.brightness ?? 60
